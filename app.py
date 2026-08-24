@@ -10,6 +10,9 @@ from email.utils import parsedate_to_datetime, make_msgid, formatdate
 import smtplib
 import os
 import base64
+import hashlib
+import json
+from datetime import datetime, timezone
 
 try:
     import docker as docker_sdk
@@ -18,7 +21,17 @@ except Exception:
 
 app = FastAPI(title="mail-helper")
 
-API_KEY = os.getenv("API_KEY", "")
+# Per-caller scoped tokens, replacing the old single shared API_KEY.
+# File is keyed by sha256(raw key) so raw keys are never stored at rest;
+# see require_scope() below. Not baked into the image (mutated at runtime
+# for last_used_at) — expected to be bind-mounted from the deployment host.
+SERVICE_TOKENS_FILE = os.getenv("SERVICE_TOKENS_FILE", "/service_tokens.json")
+
+# Mailbox -> persona/brand metadata (character_id filled in once
+# stighive-character-agent assigns real ids; see mailbox_map.json).
+# Versioned in the image — not secret, just descriptive metadata.
+MAILBOX_MAP_FILE = os.getenv("MAILBOX_MAP_FILE", "/app/mailbox_map.json")
+
 IMAP_HOST = os.getenv("IMAP_HOST", "mailserver")
 IMAP_PORT = int(os.getenv("IMAP_PORT", 993))
 IMAP_SSL = os.getenv("IMAP_SSL", "true").lower() == "true"
@@ -85,11 +98,58 @@ class SendRequest(BaseModel):
 # Auth / validation
 # -----------------------------
 
-def require_api_key(request: Request) -> None:
+def _load_service_tokens() -> Dict[str, Any]:
+    try:
+        with open(SERVICE_TOKENS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_service_tokens(tokens: Dict[str, Any]) -> None:
+    try:
+        with open(SERVICE_TOKENS_FILE, "w", encoding="utf-8") as f:
+            json.dump(tokens, f, indent=2)
+    except Exception:
+        pass
+
+
+def require_scope(request: Request, scope: str) -> str:
+    """Validate the caller's bearer token and required scope.
+
+    Tokens are looked up by sha256 hash (never stored raw) and re-read on
+    every call so a revocation (status flipped to "revoked" in the file)
+    takes effect immediately, with no redeploy needed. Returns the caller
+    name on success.
+    """
     auth = request.headers.get("authorization", "")
-    expected = f"Bearer {API_KEY}"
-    if not API_KEY or auth != expected:
+    if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    raw_key = auth[len("Bearer "):]
+    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    tokens = _load_service_tokens()
+    entry = tokens.get(key_hash)
+    if not entry or entry.get("status") != "active":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if scope not in entry.get("scopes", []):
+        raise HTTPException(status_code=403, detail=f"Token lacks '{scope}' scope")
+
+    entry["last_used_at"] = datetime.now(timezone.utc).isoformat()
+    tokens[key_hash] = entry
+    _save_service_tokens(tokens)
+
+    return entry.get("name", "unknown")
+
+
+def load_mailbox_map() -> Dict[str, Any]:
+    try:
+        with open(MAILBOX_MAP_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def validate_mailbox(mailbox: str) -> None:
@@ -505,9 +565,20 @@ def health():
 @app.get("/mailboxes")
 @app.post("/mailboxes")
 def get_mailboxes(request: Request):
-    require_api_key(request)
+    require_scope(request, "read")
 
-    mailboxes = list_mailserver_accounts()
+    addresses = list_mailserver_accounts()
+    mailbox_map = load_mailbox_map()
+
+    mailboxes = []
+    for address in addresses:
+        meta = mailbox_map.get(address, {})
+        mailboxes.append({
+            "address": address,
+            "persona": meta.get("persona"),
+            "brand_name": meta.get("brand_name"),
+            "character_id": meta.get("character_id"),
+        })
 
     return {
         "ok": True,
@@ -518,7 +589,7 @@ def get_mailboxes(request: Request):
 
 @app.post("/fetch")
 def fetch_messages(payload: FetchRequest, request: Request):
-    require_api_key(request)
+    require_scope(request, "read")
     validate_mailbox(payload.mailbox)
 
     if payload.limit < 1 or payload.limit > 500:
@@ -564,7 +635,7 @@ def fetch_messages(payload: FetchRequest, request: Request):
 
 @app.post("/attachments/bulk")
 def bulk_attachments(payload: BulkAttachmentsRequest, request: Request):
-    require_api_key(request)
+    require_scope(request, "read")
     validate_mailbox(payload.mailbox)
 
     if not payload.items:
@@ -624,7 +695,7 @@ def bulk_attachments(payload: BulkAttachmentsRequest, request: Request):
 
 @app.post("/delete/bulk")
 def bulk_delete(payload: BulkDeleteRequest, request: Request):
-    require_api_key(request)
+    require_scope(request, "delete")
     validate_mailbox(payload.mailbox)
 
     if not payload.uids:
@@ -664,7 +735,7 @@ def bulk_delete(payload: BulkDeleteRequest, request: Request):
 
 @app.post("/send")
 def send_email(payload: SendRequest, request: Request):
-    require_api_key(request)
+    require_scope(request, "send")
     validate_mailbox(payload.mailbox)
 
     if not payload.to:
