@@ -7,7 +7,9 @@
     "stighive-character-runtime's POST /characters, and as of 2026-08-24 that project's own",
     "characters.yaml is still a template with zero real characters created (see its own TODO(build)).",
     "Once character-agent/character-runtime assigns real character_ids, update this file's",
-    "character_id fields and redeploy -- see change request written for github-stighive-character-agent."
+    "character_id fields and redeploy -- see change request written for github-stighive-character-agent.",
+    "A persona/character_id can own more than one mailbox -- this mapping is many-to-one by design",
+    "(e.g. Jess owns both thelunarkeepp@ and thelunarkeep@, confirmed 2026-08-25, not a data error)."
   ],
   "admin@0239409423.com": { "persona": null, "brand_name": null, "character_id": null },
   "agents@0239409423.com": { "persona": null, "brand_name": null, "character_id": null },
@@ -31,8 +33,8 @@
   "solsticestandard@0239409423.com": { "persona": "Ellie", "brand_name": "Solstice Standard", "character_id": null },
   "theadventhome@0239409423.com": { "persona": "Liz", "brand_name": "The Advent Home", "character_id": null },
   "thedryhandbook@0239409423.com": { "persona": "Nora", "brand_name": "The Dry Handbook", "character_id": null },
-  "thelunarkeepp@0239409423.com": { "persona": "Jess", "brand_name": "The Lunar Keep", "character_id": null },
-  "thelunarkeep@0239409423.com": { "persona": "Jess", "brand_name": "The Lunar Keep", "character_id": null, "notes": "Duplicate/alias of thelunarkeepp@ (double-p) -- the brand's confirmed IG handle is @thelunarkeepp. This single-p address exists on the mail server but doesn't match the canonical handle; unclear if it's an intentional alias or a leftover provisioning typo. Not resolved unilaterally -- flagging for confirmation." },
+  "thelunarkeepp@0239409423.com": { "persona": "Jess", "brand_name": "The Lunar Keep", "character_id": null, "notes": "Matches the brand's confirmed IG handle @thelunarkeepp." },
+  "thelunarkeep@0239409423.com": { "persona": "Jess", "brand_name": "The Lunar Keep", "character_id": null, "notes": "Second mailbox for the same persona -- confirmed intentional 2026-08-25, not a duplicate/typo. Personas can own more than one mailbox." },
   "tiasplanningco@0239409423.com": { "persona": "Lucy", "brand_name": "Tía's Planning Co.", "character_id": null },
   "trastevereco@0239409423.com": { "persona": "Diana", "brand_name": "Trastevere", "character_id": null },
   "wildflowerrun@0239409423.com": { "persona": "Rachel", "brand_name": "Wildflower Run", "character_id": null }
