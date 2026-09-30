@@ -40,7 +40,13 @@ SMTP_HOST = os.getenv("SMTP_HOST", IMAP_HOST)
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "true").lower() == "true"
 
-ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "0239409423.com")
+# Comma-separated list. ALLOWED_DOMAIN (singular) is still honored for existing deployments.
+# An empty value disables the domain check.
+ALLOWED_DOMAINS = [
+    d.strip().lower()
+    for d in os.getenv("ALLOWED_DOMAINS", os.getenv("ALLOWED_DOMAIN", "0239409423.com")).split(",")
+    if d.strip()
+]
 MAILSERVER_CONTAINER = os.getenv("MAILSERVER_CONTAINER", "mailserver")
 
 # Optional fallback if you mount DMS config into the sidecar:
@@ -155,7 +161,7 @@ def load_mailbox_map() -> Dict[str, Any]:
 def validate_mailbox(mailbox: str) -> None:
     if not mailbox or "@" not in mailbox:
         raise HTTPException(status_code=400, detail="Invalid mailbox")
-    if ALLOWED_DOMAIN and not mailbox.lower().endswith("@" + ALLOWED_DOMAIN.lower()):
+    if ALLOWED_DOMAINS and mailbox.lower().rsplit("@", 1)[1] not in ALLOWED_DOMAINS:
         raise HTTPException(status_code=403, detail="Mailbox not allowed")
 
 
