@@ -120,13 +120,13 @@ def _save_service_tokens(tokens: Dict[str, Any]) -> None:
         pass
 
 
-def require_scope(request: Request, scope: str) -> str:
+def require_scope(request: Request, scope: str) -> Dict[str, Any]:
     """Validate the caller's bearer token and required scope.
 
     Tokens are looked up by sha256 hash (never stored raw) and re-read on
     every call so a revocation (status flipped to "revoked" in the file)
-    takes effect immediately, with no redeploy needed. Returns the caller
-    name on success.
+    takes effect immediately, with no redeploy needed. Returns the token
+    entry on success (callers use it for per-token allowlist checks).
     """
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
@@ -147,7 +147,48 @@ def require_scope(request: Request, scope: str) -> str:
     tokens[key_hash] = entry
     _save_service_tokens(tokens)
 
-    return entry.get("name", "unknown")
+    return entry
+
+
+def enforce_mailbox_allowlist(entry: Dict[str, Any], mailbox: str) -> None:
+    """If the token entry has allowed_mailboxes, require mailbox to be in it.
+
+    Case-insensitive exact match. Absent field = no restriction.
+    Detail strings never echo caller credentials.
+    """
+    allowed = entry.get("allowed_mailboxes")
+    if allowed is None:
+        return
+    if mailbox.lower() not in {a.lower() for a in allowed}:
+        raise HTTPException(status_code=403, detail="Mailbox not allowed for this token")
+
+
+def enforce_recipient_allowlist(
+    entry: Dict[str, Any],
+    to: List[str],
+    cc: List[str],
+    bcc: List[str],
+    reply_to: Optional[str],
+) -> None:
+    """If the token entry has allowed_recipients, every to/cc/bcc (and reply_to
+    when set) must be in it. Case-insensitive exact match. Absent = no restriction.
+    """
+    allowed = entry.get("allowed_recipients")
+    if allowed is None:
+        return
+    allowed_lc = {a.lower() for a in allowed}
+    for field_name, addrs in (("to", to), ("cc", cc), ("bcc", bcc)):
+        for addr in addrs:
+            if addr.lower() not in allowed_lc:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Recipient not allowed for this token ({field_name})",
+                )
+    if reply_to and reply_to.lower() not in allowed_lc:
+        raise HTTPException(
+            status_code=403,
+            detail="Recipient not allowed for this token (reply_to)",
+        )
 
 
 def load_mailbox_map() -> Dict[str, Any]:
@@ -595,8 +636,9 @@ def get_mailboxes(request: Request):
 
 @app.post("/fetch")
 def fetch_messages(payload: FetchRequest, request: Request):
-    require_scope(request, "read")
+    entry = require_scope(request, "read")
     validate_mailbox(payload.mailbox)
+    enforce_mailbox_allowlist(entry, payload.mailbox)
 
     if payload.limit < 1 or payload.limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
@@ -641,8 +683,9 @@ def fetch_messages(payload: FetchRequest, request: Request):
 
 @app.post("/attachments/bulk")
 def bulk_attachments(payload: BulkAttachmentsRequest, request: Request):
-    require_scope(request, "read")
+    entry = require_scope(request, "read")
     validate_mailbox(payload.mailbox)
+    enforce_mailbox_allowlist(entry, payload.mailbox)
 
     if not payload.items:
         return {
@@ -701,8 +744,9 @@ def bulk_attachments(payload: BulkAttachmentsRequest, request: Request):
 
 @app.post("/delete/bulk")
 def bulk_delete(payload: BulkDeleteRequest, request: Request):
-    require_scope(request, "delete")
+    entry = require_scope(request, "delete")
     validate_mailbox(payload.mailbox)
+    enforce_mailbox_allowlist(entry, payload.mailbox)
 
     if not payload.uids:
         return {
@@ -741,7 +785,7 @@ def bulk_delete(payload: BulkDeleteRequest, request: Request):
 
 @app.post("/send")
 def send_email(payload: SendRequest, request: Request):
-    require_scope(request, "send")
+    entry = require_scope(request, "send")
     validate_mailbox(payload.mailbox)
 
     if not payload.to:
@@ -753,6 +797,9 @@ def send_email(payload: SendRequest, request: Request):
 
     if payload.reply_to and "@" not in payload.reply_to:
         raise HTTPException(status_code=400, detail="Invalid reply_to address")
+
+    enforce_mailbox_allowlist(entry, payload.mailbox)
+    enforce_recipient_allowlist(entry, payload.to, payload.cc, payload.bcc, payload.reply_to)
 
     if not payload.subject or not payload.subject.strip():
         raise HTTPException(status_code=400, detail="Subject is required")
