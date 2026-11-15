@@ -90,8 +90,12 @@ in-place through the same inode instead:
        json.dump(data, f, indent=2)
    PY
    ```
-   `sed -i` on Linux also edits in place without changing the inode and
-   is acceptable; `mv new old` is **not**.
+   Do **not** use `sed -i` / `perl -i` — despite the "in place" name,
+   they write a sibling temp file and rename it over the original,
+   which swaps the host inode and leaves the container reading the
+   stale file. `mv new old` has the same problem. Only edits that
+   write back through the same file descriptor (as in the `open("r+")`
+   + `truncate()` snippet above) are safe for this bind mount.
 5. Verify: `curl -H "Authorization: Bearer <raw>" http://<host>:<port>/health`
    then a scoped call against the sidecar.
 
